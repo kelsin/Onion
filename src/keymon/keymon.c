@@ -46,8 +46,9 @@
 #define PF_KTHREAD 0x00200000
 
 // for suspend / hibernate
-#define CHECK_SEC 15   // Interval sec to check hibernate/adc
-#define SHUTDOWN_MIN 1 // Minutes to power off after hibernate
+#define CHECK_SEC 15        // Interval sec to check hibernate/adc
+#define SHUTDOWN_MIN 1      // Minutes to power off after hibernate
+#define LID_RESLEEP_MS 5000 // Flip: suspend again if lid still closed this long after waking
 #define REPEAT_SEC(val) ((val * 1000 - 250) / 50)
 #define PIDMAX 32
 
@@ -653,6 +654,7 @@ int main(void)
     // Lid state tracking for Miyoo Mini Flip
     int last_lid_state = -1;
     int current_lid_state = -1;
+    int lid_wake_ms = 0; // time of last wake from a lid-triggered suspend (0 = none)
 
     if (DEVICE_ID == MIYOO285) {
         last_lid_state = read_lid_state();
@@ -1080,41 +1082,54 @@ int main(void)
         if (DEVICE_ID == MIYOO285) {
             current_lid_state = read_lid_state();
 
+            bool lid_close_edge = current_lid_state == 0 && last_lid_state == 1;
+            // Woke with the lid still closed: suspend again (Suspend action only)
+            bool lid_resleep = current_lid_state == 0 && lid_wake_ms != 0 &&
+                               settings.lid_close_action == 0 &&
+                               (getMilliseconds() - lid_wake_ms) >= LID_RESLEEP_MS;
+
+            if (current_lid_state == 1)
+                lid_wake_ms = 0;
+
             if (current_lid_state != -1 && last_lid_state != -1 &&
                 current_lid_state != last_lid_state) {
 
                 printf_debug("Lid state change: %d -> %d", last_lid_state, current_lid_state);
 
-                if (current_lid_state == 0) {
-                    printf_debug("Lid closed detected, action: %d", settings.lid_close_action);
-
-                    switch (settings.lid_close_action) {
-                    case 0: // Suspend
-                        if (settings.disable_standby) {
-                            deepsleep();
-                        }
-                        else {
-                            turnOffScreen();
-                            hibernate_start = getMilliseconds();
-                        }
-                        break;
-                    case 1: // Shutdown
-                        print_debug("Shutting down due to lid close");
-                        deepsleep();
-                        break;
-                    case 2: // Nothing
-                        print_debug("Lid close action: Nothing");
-                        break;
-                    }
-                }
-                else {
+                if (current_lid_state != 0) {
                     print_debug("Lid opened detected");
                 }
 
                 last_lid_state = current_lid_state;
             }
+
+            if (lid_close_edge || lid_resleep) {
+                printf_debug("Lid closed detected, action: %d", settings.lid_close_action);
+
+                switch (settings.lid_close_action) {
+                case 0: // Suspend
+                    if (settings.disable_standby) {
+                        deepsleep();
+                    }
+                    else {
+                        lid_wake_ms = 0;
+                        turnOffScreen();
+                        lid_wake_ms = getMilliseconds();
+                        hibernate_start = lid_wake_ms;
+                    }
+                    break;
+                case 1: // Shutdown
+                    print_debug("Shutting down due to lid close");
+                    deepsleep();
+                    break;
+                case 2: // Nothing
+                    print_debug("Lid close action: Nothing");
+                    break;
+                }
+            }
+
             // Update last_lid_state even if it hasn't changed to handle initial -1 case
-            else if (current_lid_state != -1 && last_lid_state == -1) {
+            if (current_lid_state != -1 && last_lid_state == -1) {
                 last_lid_state = current_lid_state;
             }
         }
