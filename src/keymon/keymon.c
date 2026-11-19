@@ -159,6 +159,7 @@ const int KONAMI_CODE_LENGTH = sizeof(KONAMI_CODE) / sizeof(KONAMI_CODE[0]);
 
 // Forward declarations
 int read_lid_state(void);
+int read_lid_state_stable(int last);
 
 void takeScreenshot(void)
 {
@@ -432,7 +433,7 @@ void suspend_exec(int timeout)
         else if (!ready) {
             // Check lid state on flip devices (also while charging)
             if (DEVICE_ID == MIYOO285) {
-                int current_lid = read_lid_state();
+                int current_lid = read_lid_state_stable(suspend_lid_state);
                 if (current_lid == 1 && suspend_lid_state == 0) {
                     print_debug("Lid opened during suspend, waking up");
                     break;
@@ -589,6 +590,20 @@ int read_lid_state(void)
 }
 
 //
+//    Debounced lid read: a change from `last` is only accepted if a second
+//    read 100ms later agrees, otherwise `last` is returned.
+//
+int read_lid_state_stable(int last)
+{
+    int state = read_lid_state();
+    if (state == last)
+        return state;
+
+    usleep(100000);
+    return (read_lid_state() == state) ? state : last;
+}
+
+//
 //    Main
 //
 int main(void)
@@ -654,7 +669,8 @@ int main(void)
     // Lid state tracking for Miyoo Mini Flip
     int last_lid_state = -1;
     int current_lid_state = -1;
-    int lid_wake_ms = 0; // time of last wake from a lid-triggered suspend (0 = none)
+    int lid_wake_ms = 0;      // time of last wake from a lid-triggered suspend (0 = none)
+    int lid_open_wake_ms = 0; // time of last wake caused by opening the lid (0 = none)
 
     if (DEVICE_ID == MIYOO285) {
         last_lid_state = read_lid_state();
@@ -1080,9 +1096,12 @@ int main(void)
 
         // Check lid state for Miyoo Mini Flip - poll every iteration (500ms)
         if (DEVICE_ID == MIYOO285) {
-            current_lid_state = read_lid_state();
+            current_lid_state = read_lid_state_stable(last_lid_state);
 
-            bool lid_close_edge = current_lid_state == 0 && last_lid_state == 1;
+            // Ignore a close right after a lid-open wake (sensor bounce)
+            bool lid_bounce = lid_open_wake_ms != 0 &&
+                              (getMilliseconds() - lid_open_wake_ms) < 1000;
+            bool lid_close_edge = current_lid_state == 0 && last_lid_state == 1 && !lid_bounce;
             // Woke with the lid still closed: suspend again (Suspend action only)
             bool lid_resleep = current_lid_state == 0 && lid_wake_ms != 0 &&
                                settings.lid_close_action == 0 &&
@@ -1100,7 +1119,9 @@ int main(void)
                     print_debug("Lid opened detected");
                 }
 
-                last_lid_state = current_lid_state;
+                // A bounced close is left pending and re-evaluated next pass
+                if (!(current_lid_state == 0 && lid_bounce))
+                    last_lid_state = current_lid_state;
             }
 
             if (lid_close_edge || lid_resleep) {
@@ -1115,6 +1136,8 @@ int main(void)
                         lid_wake_ms = 0;
                         turnOffScreen();
                         lid_wake_ms = getMilliseconds();
+                        if (read_lid_state() == 1)
+                            lid_open_wake_ms = lid_wake_ms;
                         hibernate_start = lid_wake_ms;
                     }
                     break;
