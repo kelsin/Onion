@@ -418,8 +418,8 @@ void suspend_exec(int timeout)
                 }
             }
         }
-        else if (!ready && !battery_isCharging()) {
-            // Check lid state on flip devices before shutdown
+        else if (!ready) {
+            // Check lid state on flip devices (also while charging)
             if (DEVICE_ID == MIYOO285) {
                 int current_lid = read_lid_state();
                 if (current_lid == 1 && suspend_lid_state == 0) {
@@ -427,7 +427,7 @@ void suspend_exec(int timeout)
                     break;
                 }
                 suspend_lid_state = current_lid;
-                if (timeout != -1 &&
+                if (!battery_isCharging() && timeout != -1 &&
                     (getMilliseconds() - suspend_start) >= timeout) {
                     // Timeout elapsed: match non-flip shutdown behavior
                     system_powersave_off();
@@ -438,11 +438,13 @@ void suspend_exec(int timeout)
                 continue;
             }
 
-            // Original timeout shutdown behavior (non-flip devices)
-            system_powersave_off();
-            resume();
-            usleep(150000);
-            deepsleep();
+            if (!battery_isCharging()) {
+                // Original timeout shutdown behavior (non-flip devices)
+                system_powersave_off();
+                resume();
+                usleep(150000);
+                deepsleep();
+            }
         }
     }
 
