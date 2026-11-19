@@ -223,7 +223,7 @@ void menu_system(void *_)
                                          .label = "Lid close action",
                                          .item_type = MULTIVALUE,
                                          .value_max = 2,
-                                         .value_labels = {"Suspend", "Shutdown", "Nothing"},
+                                         .value_labels = {"Suspend", "Save & shutdown", "Nothing"},
                                          .value = settings.lid_close_action,
                                          .action = action_setLidCloseAction},
                                      "Choose what happens when \n"
