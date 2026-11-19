@@ -395,9 +395,17 @@ void suspend_exec(int timeout)
             read(input_fd, &ev, sizeof(ev));
             if ((ev.type != EV_KEY) || (ev.value > REPEAT))
                 continue;
+            // Flip: ignore button wake-ups while the lid is closed
+            // (unless the close action is "Nothing"). Read error counts as open.
+            bool lid_closed_ignore = DEVICE_ID == MIYOO285 &&
+                                     settings.lid_close_action != 2 &&
+                                     read_lid_state() == 0;
             if (ev.code == HW_BTN_POWER) {
-                if (ev.value == RELEASED)
+                if (ev.value == RELEASED) {
+                    if (lid_closed_ignore)
+                        continue;
                     break;
+                }
                 else if (ev.value == PRESSED)
                     repeat_power = 0;
                 else if (ev.value == REPEAT) {
@@ -410,6 +418,8 @@ void suspend_exec(int timeout)
             }
             else if (ev.value == RELEASED) {
                 if (ev.code == HW_BTN_MENU) {
+                    if (lid_closed_ignore)
+                        continue;
                     // screenshot
                     system_powersave_off();
                     display_on();
