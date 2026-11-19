@@ -16,6 +16,8 @@ loop pass (`handle_lid`); rename lid close option to "Save & shutdown".
 Research: /Users/kelsin/src/sync-roms/reports/Miyoo Mini Flip lid in Onion.md
 (lid = poll `/sys/devices/soc0/soc/soc:hall-mh248/hallvalue`, 1=open, 0=closed;
 logic is all in `src/keymon/keymon.c`; known unfixed bugs are listed there).
+The lid sends no input event: tested on hardware, `event0`, `event1` and `mice`
+stay silent on lid open/close, so polling `hallvalue` is the only option.
 
 ## Build
 
