@@ -161,6 +161,11 @@ const int KONAMI_CODE_LENGTH = sizeof(KONAMI_CODE) / sizeof(KONAMI_CODE[0]);
 int read_lid_state(void);
 int read_lid_state_stable(int last);
 
+// Lid state tracking for Miyoo Mini Flip
+static int last_lid_state = -1;
+static int lid_wake_ms = 0;      // time of last wake from a lid-triggered suspend (0 = none)
+static int lid_open_wake_ms = 0; // time of last wake caused by opening the lid (0 = none)
+
 void takeScreenshot(void)
 {
     super_short_pulse();
@@ -436,6 +441,7 @@ void suspend_exec(int timeout)
                 int current_lid = read_lid_state_stable(suspend_lid_state);
                 if (current_lid == 1 && suspend_lid_state == 0) {
                     print_debug("Lid opened during suspend, waking up");
+                    lid_open_wake_ms = getMilliseconds();
                     break;
                 }
                 suspend_lid_state = current_lid;
@@ -596,25 +602,23 @@ int read_lid_state(void)
 int read_lid_state_stable(int last)
 {
     int state = read_lid_state();
-    if (state == last)
-        return state;
+    if (state == last || state == -1)
+        return state == -1 ? last : state;
 
     usleep(100000);
     return (read_lid_state() == state) ? state : last;
 }
 
-// Lid state tracking for Miyoo Mini Flip
-static int last_lid_state = -1;
-static int lid_wake_ms = 0;      // time of last wake from a lid-triggered suspend (0 = none)
-static int lid_open_wake_ms = 0; // time of last wake caused by opening the lid (0 = none)
-
 //
 //    Flip lid handling, called on every main loop pass (every 500ms)
 //
-static void handle_lid(int *hibernate_start)
+// Returns true if it suspended or shut down (pending input may have been consumed)
+static bool handle_lid(int *hibernate_start)
 {
     if (DEVICE_ID != MIYOO285)
-        return;
+        return false;
+
+    bool acted = false;
 
     int current_lid_state = read_lid_state_stable(last_lid_state);
 
@@ -647,6 +651,7 @@ static void handle_lid(int *hibernate_start)
     if (lid_close_edge || lid_resleep) {
         printf_debug("Lid closed detected, action: %d", settings.lid_close_action);
 
+        acted = settings.lid_close_action != 2;
         switch (settings.lid_close_action) {
         case 0: // Suspend
             if (settings.disable_standby) {
@@ -675,6 +680,8 @@ static void handle_lid(int *hibernate_start)
     if (current_lid_state != -1 && last_lid_state == -1) {
         last_lid_state = current_lid_state;
     }
+
+    return acted;
 }
 
 //
@@ -765,7 +772,8 @@ int main(void)
         int poll_result = poll(fds, 1, poll_timeout_ms);
 
         // Runs on every pass, even when input handling below `continue`s
-        handle_lid(&hibernate_start);
+        if (handle_lid(&hibernate_start))
+            continue;
 
         if (poll_result > 0) {
             if (!keyinput_isValid())
