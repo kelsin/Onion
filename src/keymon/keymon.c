@@ -603,6 +603,80 @@ int read_lid_state_stable(int last)
     return (read_lid_state() == state) ? state : last;
 }
 
+// Lid state tracking for Miyoo Mini Flip
+static int last_lid_state = -1;
+static int lid_wake_ms = 0;      // time of last wake from a lid-triggered suspend (0 = none)
+static int lid_open_wake_ms = 0; // time of last wake caused by opening the lid (0 = none)
+
+//
+//    Flip lid handling, called on every main loop pass (every 500ms)
+//
+static void handle_lid(int *hibernate_start)
+{
+    if (DEVICE_ID != MIYOO285)
+        return;
+
+    int current_lid_state = read_lid_state_stable(last_lid_state);
+
+    // Ignore a close right after a lid-open wake (sensor bounce)
+    bool lid_bounce = lid_open_wake_ms != 0 &&
+                      (getMilliseconds() - lid_open_wake_ms) < 1000;
+    bool lid_close_edge = current_lid_state == 0 && last_lid_state == 1 && !lid_bounce;
+    // Woke with the lid still closed: suspend again (Suspend action only)
+    bool lid_resleep = current_lid_state == 0 && lid_wake_ms != 0 &&
+                       settings.lid_close_action == 0 &&
+                       (getMilliseconds() - lid_wake_ms) >= LID_RESLEEP_MS;
+
+    if (current_lid_state == 1)
+        lid_wake_ms = 0;
+
+    if (current_lid_state != -1 && last_lid_state != -1 &&
+        current_lid_state != last_lid_state) {
+
+        printf_debug("Lid state change: %d -> %d", last_lid_state, current_lid_state);
+
+        if (current_lid_state != 0) {
+            print_debug("Lid opened detected");
+        }
+
+        // A bounced close is left pending and re-evaluated next pass
+        if (!(current_lid_state == 0 && lid_bounce))
+            last_lid_state = current_lid_state;
+    }
+
+    if (lid_close_edge || lid_resleep) {
+        printf_debug("Lid closed detected, action: %d", settings.lid_close_action);
+
+        switch (settings.lid_close_action) {
+        case 0: // Suspend
+            if (settings.disable_standby) {
+                deepsleep();
+            }
+            else {
+                lid_wake_ms = 0;
+                turnOffScreen();
+                lid_wake_ms = getMilliseconds();
+                if (read_lid_state() == 1)
+                    lid_open_wake_ms = lid_wake_ms;
+                *hibernate_start = lid_wake_ms;
+            }
+            break;
+        case 1: // Shutdown
+            print_debug("Shutting down due to lid close");
+            deepsleep();
+            break;
+        case 2: // Nothing
+            print_debug("Lid close action: Nothing");
+            break;
+        }
+    }
+
+    // Update last_lid_state even if it hasn't changed to handle initial -1 case
+    if (current_lid_state != -1 && last_lid_state == -1) {
+        last_lid_state = current_lid_state;
+    }
+}
+
 //
 //    Main
 //
@@ -666,20 +740,12 @@ int main(void)
     int hibernate_time;
     int elapsed_sec = 0;
 
-    // Lid state tracking for Miyoo Mini Flip
-    int last_lid_state = -1;
-    int current_lid_state = -1;
-    int lid_wake_ms = 0;      // time of last wake from a lid-triggered suspend (0 = none)
-    int lid_open_wake_ms = 0; // time of last wake caused by opening the lid (0 = none)
-
     if (DEVICE_ID == MIYOO285) {
         last_lid_state = read_lid_state();
-        current_lid_state = last_lid_state;
         if (last_lid_state == -1) {
             // Fallback: assume open if read fails
             print_debug("Warning: Unable to read lid state, assuming open");
             last_lid_state = 1;
-            current_lid_state = 1;
         }
         else {
             printf_debug("Initial lid state: %s", last_lid_state == 1 ? "open" : "closed");
@@ -697,6 +763,9 @@ int main(void)
     while (1) {
         int poll_timeout_ms = (DEVICE_ID == MIYOO285) ? 500 : ((CHECK_SEC - elapsed_sec) * 1000);
         int poll_result = poll(fds, 1, poll_timeout_ms);
+
+        // Runs on every pass, even when input handling below `continue`s
+        handle_lid(&hibernate_start);
 
         if (poll_result > 0) {
             if (!keyinput_isValid())
@@ -1092,69 +1161,6 @@ int main(void)
             }
 
             hibernate_start = getMilliseconds();
-        }
-
-        // Check lid state for Miyoo Mini Flip - poll every iteration (500ms)
-        if (DEVICE_ID == MIYOO285) {
-            current_lid_state = read_lid_state_stable(last_lid_state);
-
-            // Ignore a close right after a lid-open wake (sensor bounce)
-            bool lid_bounce = lid_open_wake_ms != 0 &&
-                              (getMilliseconds() - lid_open_wake_ms) < 1000;
-            bool lid_close_edge = current_lid_state == 0 && last_lid_state == 1 && !lid_bounce;
-            // Woke with the lid still closed: suspend again (Suspend action only)
-            bool lid_resleep = current_lid_state == 0 && lid_wake_ms != 0 &&
-                               settings.lid_close_action == 0 &&
-                               (getMilliseconds() - lid_wake_ms) >= LID_RESLEEP_MS;
-
-            if (current_lid_state == 1)
-                lid_wake_ms = 0;
-
-            if (current_lid_state != -1 && last_lid_state != -1 &&
-                current_lid_state != last_lid_state) {
-
-                printf_debug("Lid state change: %d -> %d", last_lid_state, current_lid_state);
-
-                if (current_lid_state != 0) {
-                    print_debug("Lid opened detected");
-                }
-
-                // A bounced close is left pending and re-evaluated next pass
-                if (!(current_lid_state == 0 && lid_bounce))
-                    last_lid_state = current_lid_state;
-            }
-
-            if (lid_close_edge || lid_resleep) {
-                printf_debug("Lid closed detected, action: %d", settings.lid_close_action);
-
-                switch (settings.lid_close_action) {
-                case 0: // Suspend
-                    if (settings.disable_standby) {
-                        deepsleep();
-                    }
-                    else {
-                        lid_wake_ms = 0;
-                        turnOffScreen();
-                        lid_wake_ms = getMilliseconds();
-                        if (read_lid_state() == 1)
-                            lid_open_wake_ms = lid_wake_ms;
-                        hibernate_start = lid_wake_ms;
-                    }
-                    break;
-                case 1: // Shutdown
-                    print_debug("Shutting down due to lid close");
-                    deepsleep();
-                    break;
-                case 2: // Nothing
-                    print_debug("Lid close action: Nothing");
-                    break;
-                }
-            }
-
-            // Update last_lid_state even if it hasn't changed to handle initial -1 case
-            if (current_lid_state != -1 && last_lid_state == -1) {
-                last_lid_state = current_lid_state;
-            }
         }
 
         checkHeadphoneJack();
