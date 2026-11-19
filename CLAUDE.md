@@ -7,6 +7,12 @@ top of `origin/main` (cherry-picked from `origin/v4.5-dev`, no merge commits):
 MainUI-285 (#1873), the Flip lid/hardware PR (#1860), clang-format, then our
 build script + this file. Keep it linear so `git rebase origin/main` works.
 
+On top of that, Flip lid fixes in `src/keymon/keymon.c` (and one label in
+`src/tweaks/menus.h`), one commit each: wake on lid open while charging;
+ignore buttons while lid closed during suspend; suspend again if lid still
+closed after wake (5s); debounce lid sensor reads; run lid check on every main
+loop pass (`handle_lid`); rename lid close option to "Save & shutdown".
+
 Research: /Users/kelsin/src/sync-roms/reports/Miyoo Mini Flip lid in Onion.md
 (lid = poll `/sys/devices/soc0/soc/soc:hall-mh248/hallvalue`, 1=open, 0=closed;
 logic is all in `src/keymon/keymon.c`; known unfixed bugs are listed there).
@@ -41,4 +47,6 @@ temporary file ... Permission denied"), hence the container-local copy.
    and the same for `tweaks`.
 5. Build with the next suffix and commit locally. Not tested on hardware as of
    the first build (kelsin-001): check the "Lid close action" option appears in
-   Tweaks > System (a self-built v4.5-dev once reportedly didn't show it).
+   Tweaks > System (a self-built v4.5-dev once reportedly didn't show it). If
+   it is missing, run `cat /tmp/deviceModel` on the device; it must be `285`
+   (the item is gated on `DEVICE_ID == MIYOO285`).
